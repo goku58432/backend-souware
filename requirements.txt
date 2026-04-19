@@ -10,3 +10,4 @@ python-dotenv==1.0.1
 pydantic[email]==2.9.2
 PyJWT==2.9.0
 aiofiles==24.1.0
+cloudinary==1.40.0

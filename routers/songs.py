@@ -1,23 +1,33 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List
-import shutil, os, uuid
+import os, uuid
 from pathlib import Path
 from database import get_db
 from dependencies import get_current_user, get_current_admin
 import models, schemas
+import cloudinary
+import cloudinary.uploader
+
+# ─── Cloudinary config ────────────────────────────────────────────────────────
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    secure=True
+)
 
 router = APIRouter()
-UPLOAD_DIR = Path("uploads")
 
-def save_file(upload: UploadFile, subfolder: str) -> str:
-    ext = Path(upload.filename).suffix
-    filename = f"{uuid.uuid4()}{ext}"
-    path = UPLOAD_DIR / subfolder / filename
-    with open(path, "wb") as f:
-        shutil.copyfileobj(upload.file, f)
-    base_url = os.getenv("BASE_URL", "http://localhost:8000")
-    return f"{base_url}/uploads/{subfolder}/{filename}"
+def upload_to_cloudinary(file: UploadFile, folder: str, resource_type: str = "auto") -> str:
+    contents = file.file.read()
+    result = cloudinary.uploader.upload(
+        contents,
+        folder=f"soundwave/{folder}",
+        resource_type=resource_type,
+        public_id=f"{uuid.uuid4()}"
+    )
+    return result["secure_url"]
 
 # ─── GENRES ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +55,12 @@ def get_songs(
             models.Song.album.ilike(f"%{search}%")
         )
     return q.offset(skip).limit(limit).all()
+
+@router.get("/top/popular", response_model=List[schemas.SongOut])
+def get_popular(limit: int = 10, db: Session = Depends(get_db)):
+    return db.query(models.Song).filter(
+        models.Song.is_active == True
+    ).order_by(models.Song.play_count.desc()).limit(limit).all()
 
 @router.get("/{song_id}", response_model=schemas.SongOut)
 def get_song(song_id: int, db: Session = Depends(get_db)):
@@ -76,9 +92,10 @@ async def create_song(
     final_audio = audio_url
 
     if image_file and image_file.filename:
-        final_image = save_file(image_file, "images")
+        final_image = upload_to_cloudinary(image_file, "images", "image")
+
     if audio_file and audio_file.filename:
-        final_audio = save_file(audio_file, "songs")
+        final_audio = upload_to_cloudinary(audio_file, "songs", "video")
 
     song = models.Song(
         title=title, author=author, album=album,
@@ -132,9 +149,3 @@ def register_play(
     db.add(history)
     db.commit()
     return {"message": "Play registered"}
-
-@router.get("/top/popular", response_model=List[schemas.SongOut])
-def get_popular(limit: int = 10, db: Session = Depends(get_db)):
-    return db.query(models.Song).filter(
-        models.Song.is_active == True
-    ).order_by(models.Song.play_count.desc()).limit(limit).all()
